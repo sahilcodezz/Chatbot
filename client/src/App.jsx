@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 const STORAGE_KEY = "ai-chat-history";
+const MEMORY_KEY = "ai-chat-memories";
 
 const suggestions = [
   {
@@ -36,6 +37,38 @@ function App() {
       return [];
     }
   });
+  const [memories, setMemories] = useState(() => {
+    try {
+      const saved = localStorage.getItem(MEMORY_KEY);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const extraMemory = async (userText) => {
+    try {
+      const response = await fetch("http://localhost:5000/api/memory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: userText }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) return;
+
+      if (data.shouldRemember && data.memory) {
+        setMemories((prev) => {
+          if (prev.includes(data.memory)) return prev;
+          return [...prev, data.memory];
+        });
+      }
+    } catch (error) {
+      console.error("Memory extraction error:", error);
+    }
+  };
+  
 
   const [activeChat, setActiveChat] = useState(null);
   const [input, setInput] = useState("");
@@ -51,12 +84,18 @@ function App() {
     }
   });
   const [searchQuery, setSearchQuery] = useState("");  // fix: was misnamed setsearchquery / searchquery
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState("");
   const messagesEndRef = useRef(null);
+  const abortControllerRef = useRef(null);
 
   // Save chats
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(chats));
   }, [chats]);
+  useEffect(() => {
+    localStorage.setItem(MEMORY_KEY, JSON.stringify(memories));
+  }, [memories]);
 
   const currentChat = chats.find((chat) => chat.id === activeChat);
   const messages = currentChat?.messages || [];
@@ -77,6 +116,111 @@ function App() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
+
+  // =========================
+  // STOP GENERATING
+  // =========================
+
+  const stopGenerating = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsLoading(false);
+  };
+
+  // =========================
+  // EDIT USER MESSAGE
+  // =========================
+
+  const startEdit = (message) => {
+    setEditingId(message.id);
+    setEditText(message.content);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditText("");
+  };
+
+  const submitEdit = async (messageId) => {
+    if (!editText.trim() || isLoading) return;
+
+    const chat = chats.find((c) => c.id === activeChat);
+    if (!chat) return;
+
+    const messageIndex = chat.messages.findIndex((m) => m.id === messageId);
+    if (messageIndex === -1) return;
+
+    const newText = editText.trim();
+    setEditingId(null);
+    setEditText("");
+    setIsLoading(true);
+
+    const updatedMessages = chat.messages
+      .slice(0, messageIndex + 1)
+      .map((m) => (m.id === messageId ? { ...m, content: newText } : m));
+
+    const history = updatedMessages.slice(0, messageIndex);
+
+    setChats((prev) =>
+      prev.map((c) =>
+        c.id === activeChat ? { ...c, messages: updatedMessages } : c
+      )
+    );
+
+    try {
+      abortControllerRef.current = new AbortController();
+      const response = await fetch("http://localhost:5000/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: newText, history }),
+        signal: abortControllerRef.current.signal,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Failed to generate AI response");
+      }
+
+      const assistantMessage = {
+        id: Date.now(),
+        role: "assistant",
+        content: data.reply,
+      };
+
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === activeChat
+            ? { ...c, messages: [...updatedMessages, assistantMessage] }
+            : c
+        )
+      );
+    } catch (error) {
+      if (error.name === "AbortError") return; // stopped by user
+      console.error("Edit error:", error);
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === activeChat
+            ? {
+                ...c,
+                messages: [
+                  ...updatedMessages,
+                  {
+                    id: Date.now(),
+                    role: "assistant",
+                    content: "Unable to connect to the backend. Please make sure the server is running.",
+                  },
+                ],
+              }
+            : c
+        )
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   // =========================
   // NEW CHAT
@@ -122,10 +266,12 @@ function App() {
     setIsLoading(true);
 
     try {
+      abortControllerRef.current = new AbortController();
       const response = await fetch("http://localhost:5000/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: userMessage.content, history }),
+        signal: abortControllerRef.current.signal,
       });
 
       const data = await response.json();
@@ -149,6 +295,7 @@ function App() {
         )
       );
     } catch (error) {
+      if (error.name === "AbortError") return; // stopped by user
       console.error("Regenerate error:", error);
     } finally {
       setIsLoading(false);
@@ -180,6 +327,7 @@ function App() {
     const userText = input.trim();
     setInput("");
     setIsLoading(true);
+    extraMemory(userText)
 
     const chatId = activeChat || Date.now();
 
@@ -223,10 +371,16 @@ function App() {
     }
 
     try {
+      abortControllerRef.current = new AbortController();
       const response = await fetch("http://localhost:5000/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userText, history: chatHistory }),
+        body: JSON.stringify({
+           message: userText, 
+           history: chatHistory,
+           memories,
+          }),
+        signal: abortControllerRef.current.signal,
       });
 
       const data = await response.json();
@@ -252,6 +406,7 @@ function App() {
         )
       );
     } catch (error) {
+      if (error.name === "AbortError") return; // stopped by user
       console.error("Chat error:", error);
 
       const errorMessage = {
@@ -612,21 +767,68 @@ function App() {
                         message.role === "user" ? "flex flex-col items-end" : ""
                       }`}
                     >
-                      <p className="mb-1.5 text-[10px] font-semibold text-slate-400">
+                      <div className="mb-1.5 text-[10px] font-semibold text-slate-400">
                         {message.role === "user" ? "You" : "AI Assistant"}
-                      </p>
+                      </div>
 
-                      <div
-                        className={`
-                          text-sm leading-7
-                          ${
-                            message.role === "user"
-                              ? "whitespace-pre-wrap rounded-2xl rounded-br-md bg-blue-600 px-4 py-3 text-white shadow-sm"
-                              : "text-slate-700"
-                          }
-                        `}
-                      >
-                        {message.role === "assistant" ? (
+                      {/* USER MESSAGE — inline edit or bubble */}
+                      {message.role === "user" ? (
+                        editingId === message.id ? (
+                          <div className="w-full min-w-[260px]">
+                            <textarea
+                              value={editText}
+                              onChange={(e) => setEditText(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" && !e.shiftKey) {
+                                  e.preventDefault();
+                                  submitEdit(message.id);
+                                }
+                                if (e.key === "Escape") cancelEdit();
+                              }}
+                              rows={3}
+                              className="w-full rounded-2xl rounded-br-md border border-blue-400 bg-white px-4 py-3 text-sm text-slate-700 outline-none ring-2 ring-blue-100 focus:ring-blue-300"
+                              autoFocus
+                            />
+                            <div className="mt-1.5 flex justify-end gap-2">
+                              <button
+                                onClick={cancelEdit}
+                                className="rounded-lg px-3 py-1 text-[10px] text-slate-500 hover:bg-slate-100"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onClick={() => submitEdit(message.id)}
+                                disabled={!editText.trim() || isLoading}
+                                className="rounded-lg bg-blue-600 px-3 py-1 text-[10px] font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
+                              >
+                                Send
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="group relative">
+                            <div className="whitespace-pre-wrap rounded-2xl rounded-br-md bg-blue-600 px-4 py-3 text-sm leading-7 text-white shadow-sm">
+                              {message.content}
+                            </div>
+                            {/* hover actions */}
+                            <div className="mt-1 flex justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                              <button
+                                onClick={() => copyMessage(message.content, message.id)}
+                                className="rounded-lg px-2 py-1 text-[10px] text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                              >
+                                {copiedId === message.id ? "✓ Copied" : "Copy"}
+                              </button>
+                              <button
+                                onClick={() => startEdit(message)}
+                                className="rounded-lg px-2 py-1 text-[10px] text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                              >
+                                ✎ Edit
+                              </button>
+                            </div>
+                          </div>
+                        )
+                      ) : (
+                          <div className="text-sm leading-7 text-slate-700">
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
                             components={{
@@ -675,7 +877,7 @@ function App() {
                               },
                               p({ children }) {
                                 return (
-                                  <p className="mb-3 last:mb-0">{children}</p>
+                                  <div className="mb-3 last:mb-0">{children}</div>
                                 );
                               },
                               ul({ children }) {
@@ -703,10 +905,8 @@ function App() {
                           >
                             {message.content}
                           </ReactMarkdown>
-                        ) : (
-                          message.content
+                          </div>
                         )}
-                      </div>
 
                       {/* AI ACTIONS */}
                       {message.role === "assistant" && (
@@ -817,19 +1017,29 @@ function App() {
                   </span>
                 </div>
                 <button
-                  onClick={sendMessage}
-                  disabled={!input.trim() || isLoading}
+                  onClick={isLoading ? stopGenerating : sendMessage}
+                  disabled={!isLoading && !input.trim()}
                   className={`
                     flex h-9 items-center gap-2 rounded-xl px-4 text-xs font-semibold transition
                     ${
-                      input.trim() && !isLoading
+                      isLoading
+                        ? "bg-red-500 text-white shadow-md shadow-red-500/20 hover:bg-red-600"
+                        : input.trim()
                         ? "bg-blue-600 text-white shadow-md shadow-blue-600/20 hover:bg-blue-700"
                         : "bg-slate-100 text-slate-400"
                     }
                   `}
                 >
-                  {isLoading ? "Thinking..." : "Send"}
-                  <span>↑</span>
+                  {isLoading ? (
+                    <>
+                      <span className="h-3 w-3 rounded-sm bg-white" />
+                      Stop
+                    </>
+                  ) : (
+                    <>
+                      Send <span>↑</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>
