@@ -10,6 +10,16 @@ const PORT = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json());
+const multer = require("multer");
+const pdfParse = require("pdf-parse");
+
+const upload = multer({
+storage: multer.memoryStorage(),
+limits: {
+fileSize: 10 * 1024 * 1024, // 10 MB
+},
+});
+
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -143,6 +153,58 @@ res.status(500).json({
 
 }
 });
+app.post("/api/documents/upload", upload.single("document"), async (req, res) => {
+try {
+if (!req.file) {
+return res.status(400).json({
+success: false,
+error: "PDF document is required",
+});
+}
+
+
+if (req.file.mimetype !== "application/pdf") {
+  return res.status(400).json({
+    success: false,
+    error: "Only PDF files are supported",
+  });
+}
+
+const pdfData = await pdfParse(req.file.buffer);
+
+const text = pdfData.text.trim();
+
+if (!text) {
+  return res.status(400).json({
+    success: false,
+    error: "Could not extract text from this PDF",
+  });
+}
+
+res.json({
+  success: true,
+  document: {
+    name: req.file.originalname,
+    size: req.file.size,
+    pages: pdfData.numpages,
+    text,
+  },
+});
+
+
+} catch (error) {
+console.error("PDF upload error:", error);
+
+
+res.status(500).json({
+  success: false,
+  error: "Failed to process PDF",
+});
+
+
+}
+});
+
 
 // =========================
 // CHAT API
