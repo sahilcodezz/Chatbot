@@ -1,4 +1,5 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
+
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { motion, AnimatePresence } from "framer-motion";
@@ -23,12 +24,6 @@ const fadeUp = {
 const fadeIn = {
   hidden: { opacity: 0 },
   show:   { opacity: 1, transition: { duration: 0.22 } },
-};
-
-const slideLeft = {
-  hidden: { opacity: 0, x: 20 },
-  show:   { opacity: 1, x: 0, transition: { duration: 0.3, ease: [0.25, 0.1, 0.25, 1] } },
-  exit:   { opacity: 0, x: 20, transition: { duration: 0.2 } },
 };
 
 // ── Tiny reusable icon-button ────────────────────────────────────────────────
@@ -112,7 +107,11 @@ function AIMarkdown({ content, messageId, copiedId, onCopy }) {
 
 // ════════════════════════════════════════════════════════════════════════════
 export default function App() {
-  // ── State ────────────────────────────────────────────────────────────────
+  // ── State ───────────
+  // ─────────────────────────────────────────────────────
+
+  const [isListening, setIsListening] = useState(false);
+  const speechRecognitionRef = useRef(null);
   const [chats, setChats] = useState(() => {
     try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
     catch { return []; }
@@ -126,6 +125,7 @@ export default function App() {
   const [isLoading, setIsLoading]     = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [copiedId, setCopiedId]       = useState(null);
+  
   const [feedback, setFeedback]       = useState(() => {
     try { return JSON.parse(localStorage.getItem("ai-chat-feedback")) || {}; }
     catch { return {}; }
@@ -138,6 +138,7 @@ export default function App() {
   const messagesEndRef    = useRef(null);
   const abortControllerRef = useRef(null);
   const textareaRef        = useRef(null);
+  const idCounterRef       = useRef(0);
 
   // ── Persistence ──────────────────────────────────────────────────────────
   useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(chats)); }, [chats]);
@@ -145,7 +146,7 @@ export default function App() {
 
   // ── Derived ──────────────────────────────────────────────────────────────
   const currentChat   = chats.find((c) => c.id === activeChat);
-  const messages      = currentChat?.messages || [];
+  const messages      = useMemo(() => currentChat?.messages || [], [currentChat]);
   const filteredChats = chats.filter((chat) => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return true;
@@ -260,14 +261,14 @@ export default function App() {
       if (!res.ok || !data.success) throw new Error(data.error);
       setChats((prev) => prev.map((c) =>
         c.id === activeChat
-          ? { ...c, messages: [...updated, { id: Date.now(), role: "assistant", content: data.reply }] }
+          ? { ...c, messages: [...updated, { id: ++idCounterRef.current, role: "assistant", content: data.reply }] }
           : c
       ));
     } catch (e) {
       if (e.name === "AbortError") return;
       setChats((prev) => prev.map((c) =>
         c.id === activeChat
-          ? { ...c, messages: [...updated, { id: Date.now(), role: "assistant", content: "Unable to connect to the backend." }] }
+          ? { ...c, messages: [...updated, { id: ++idCounterRef.current, role: "assistant", content: "Unable to connect to the backend." }] }
           : c
       ));
     } finally { setIsLoading(false); }
@@ -317,14 +318,79 @@ export default function App() {
     });
   };
 
+const speakMessage = (text) => {
+  if (!("speechSynthesis" in window)) {
+    alert("Text-to-speech is not supported in this browser.");
+    return;
+  }
+
+
+  window.speechSynthesis.cancel();
+
+
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = "en-US";
+  utterance.rate = 1;
+  utterance.pitch = 1;
+
+
+  window.speechSynthesis.speak(utterance);
+};
+
+const startVoiceInput = () => {
+  const SpeechRecognition =
+    window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  if (!SpeechRecognition) {
+    alert("Voice input is not supported in this browser.");
+    return;
+  }
+
+  if (isListening) {
+    speechRecognitionRef.current?.stop();
+    setIsListening(false);
+    return;
+  }
+
+  const recognition = new SpeechRecognition();
+
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.lang = "en-US";
+
+  recognition.onstart = () => {
+    setIsListening(true);
+  };
+
+  recognition.onresult = (event) => {
+    const transcript = event.results[0][0].transcript;
+
+    setInput((prev) =>
+      prev.trim() ? `${prev} ${transcript}` : transcript
+    );
+  };
+
+  recognition.onerror = (event) => {
+    console.error("Speech recognition error:", event.error);
+    setIsListening(false);
+  };
+
+  recognition.onend = () => {
+    setIsListening(false);
+  };
+
+  speechRecognitionRef.current = recognition;
+  recognition.start();
+};
+
   // ── Send message ─────────────────────────────────────────────────────────
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
     const userText = input.trim();
     setInput(""); setIsLoading(true);
     extraMemory(userText);
-    const chatId = activeChat || Date.now();
-    const userMsg = { id: Date.now(), role: "user", content: userText };
+    const chatId = activeChat || ++idCounterRef.current;
+    const userMsg = { id: ++idCounterRef.current, role: "user", content: userText };
     const prevMsgs = chats.find((c) => c.id === chatId)?.messages || [];
     const chatHistory = [...prevMsgs, userMsg];
     if (!activeChat) {
@@ -358,14 +424,14 @@ export default function App() {
       if (!res.ok || !data.success) throw new Error(data.error);
       setChats((prev) => prev.map((c) =>
         c.id === chatId
-          ? { ...c, messages: [...(c.messages || []), { id: Date.now() + 1, role: "assistant", content: data.reply }] }
+          ? { ...c, messages: [...(c.messages || []), { id: ++idCounterRef.current, role: "assistant", content: data.reply }] }
           : c
       ));
     } catch (e) {
       if (e.name === "AbortError") return;
       setChats((prev) => prev.map((c) =>
         c.id === chatId
-          ? { ...c, messages: [...(c.messages || []), { id: Date.now() + 1, role: "assistant", content: "Unable to connect to the backend. Please make sure the server is running." }] }
+          ? { ...c, messages: [...(c.messages || []), { id: ++idCounterRef.current, role: "assistant", content: "Unable to connect to the backend. Please make sure the server is running." }] }
           : c
       ));
     } finally { setIsLoading(false); }
@@ -583,6 +649,17 @@ export default function App() {
                     >
                       + Add
                     </button>
+                    <button
+  onClick={startVoiceInput}
+  className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm transition ${
+    isListening
+      ? "bg-red-100 text-red-600"
+      : "text-slate-400 hover:bg-slate-100"
+  }`}
+  title={isListening ? "Stop listening" : "Voice input"}
+>
+  {isListening ? "🔴" : "🎤"}
+</button>
                     {memories.length >= 2 && (
                       <button
                         onClick={consolidateMemories}
@@ -778,6 +855,12 @@ export default function App() {
                       layout
                       className={`flex gap-3 ${message.role === "user" ? "justify-end" : "justify-start"}`}
                     >
+                    <button
+  onClick={() => speakMessage(message.content)}
+  className="rounded-lg px-2 py-1 text-[10px] text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+>
+  🔊 Speak
+</button>
 
                       {/* AI avatar */}
                       {message.role === "assistant" && (

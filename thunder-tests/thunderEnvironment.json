@@ -1,0 +1,16 @@
+{
+  "version": "1.0",
+  "environments": [
+    {
+      "_id": "env-chatbot-local",
+      "name": "Chatbot - Local",
+      "data": [
+        {
+          "name": "base_url",
+          "value": "http://localhost:5000",
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}
