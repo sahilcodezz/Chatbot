@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
 const { GoogleGenAI } = require("@google/genai");
+const axios = require("axios");
 
 dotenv.config();
 
@@ -55,7 +56,7 @@ OR
 User message: "${messages}"`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash-live-preview",
+      model: "gemini-3.6-flash",
       contents: [{ role: "user", parts: [{ text: prompt }] }],
     });
 
@@ -211,7 +212,7 @@ res.status(500).json({
 // =========================
 app.post("/api/chat", async (req, res) => {
   try {
-    const { message, history = [], memories = [] } = req.body;
+    const { message, history = [], memories = [],useWeb = false } = req.body;
 
     if (!message || !message.trim()) {
       return res.status(400).json({ success: false, error: "Message is required" });
@@ -253,6 +254,109 @@ app.post("/api/chat", async (req, res) => {
         parts: [{ text: memoryContext }],
       });
     }
+    // =========================
+// AUTOMATIC WEB SEARCH DETECTION
+// =========================
+
+const webSearchKeywords = [
+  "latest",
+  "today",
+  "current",
+  "now",
+  "recent",
+  "news",
+  "this week",
+  "this month",
+  "2026",
+  "price",
+  "weather",
+  "stock",
+  "release",
+  "released",
+  "new version",
+  "what happened",
+];
+
+const lowerMessage = message.toLowerCase();
+
+const shouldSearchWeb = webSearchKeywords.some((keyword) =>
+  lowerMessage.includes(keyword)
+);
+
+console.log(
+  `Web search: ${shouldSearchWeb ? "YES 🌐" : "NO 🧠"} → ${message}`
+);
+    // =========================
+// WEB SEARCH CONTEXT
+// =========================
+
+let webContext = "";
+
+if (shouldSearchWeb) {
+  try {
+    const searchResponse = await axios.post(
+      "https://api.tavily.com/search",
+      {
+        api_key: process.env.TAVILY_API_KEY,
+        query: message.trim(),
+        search_depth: "advanced",
+        max_results: 5,
+        include_answer: true,
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const searchData = searchResponse.data;
+
+    webContext = `
+The user requested web search.
+
+Use the following live web search results to answer the user's question.
+Prefer information from these results over outdated knowledge.
+
+Web search answer:
+${searchData.answer || "No direct answer found."}
+
+Web sources:
+${(searchData.results || [])
+  .map(
+    (result, index) =>
+      `${index + 1}. ${result.title}
+URL: ${result.url}
+Content: ${result.content}`
+  )
+  .join("\n\n")}
+
+Important:
+- Do not invent information.
+- If the search results are insufficient, say so.
+- Mention relevant sources naturally in your answer.
+`;
+
+    contents.unshift({
+      role: "user",
+      parts: [{ text: webContext }],
+    });
+
+    contents.unshift({
+      role: "model",
+      parts: [
+        {
+          text: "Understood. I will use the provided web search results when answering.",
+        },
+      ],
+    });
+  } catch (searchError) {
+    console.error(
+      "Web search inside chat failed:",
+      searchError.response?.data || searchError.message
+    );
+  }
+}
 
     const response = await ai.models.generateContent({
       model: "gemini-3.6-flash",
@@ -263,6 +367,53 @@ app.post("/api/chat", async (req, res) => {
   } catch (error) {
     console.error("Gemini API Error:", error);
     res.status(500).json({ success: false, error: "Failed to generate AI response" });
+  }
+});
+// =========================
+// WEB SEARCH API
+// =========================
+app.post("/api/search", async (req, res) => {
+  try {
+    const { query } = req.body;
+
+    if (!query || !query.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: "Search query is required",
+      });
+    }
+
+    const response = await axios.post(
+      "https://api.tavily.com/search",
+      {
+        api_key: process.env.TAVILY_API_KEY,
+        query: query.trim(),
+        search_depth: "advanced",
+        max_results: 5,
+        include_answer: true,
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    res.json({
+      success: true,
+      answer: response.data.answer,
+      results: response.data.results,
+    });
+  } catch (error) {
+    console.error(
+      "Tavily Search Error:",
+      error.response?.data || error.message
+    );
+
+    res.status(500).json({
+      success: false,
+      error: "Web search failed",
+    });
   }
 });
 
