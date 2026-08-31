@@ -4,6 +4,7 @@ const dotenv = require("dotenv");
 const { GoogleGenAI } = require("@google/genai");
 const axios = require("axios");
 
+
 dotenv.config();
 
 const app = express();
@@ -11,6 +12,9 @@ const PORT = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json());
+const authRoutes = require("./routes/auth");
+
+app.use("/api/auth", authRoutes);
 const multer = require("multer");
 const pdfParse = require("pdf-parse");
 
