@@ -32,6 +32,56 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 app.get("/", (req, res) => {
   res.json({ success: true, message: "Chatbot backend is running 🚀" });
 });
+const calculateTool = {
+  name: "calculate",
+  description:
+    "Perform mathematical calculations when the user asks for arithmetic.",
+  parameters: {
+    type: "object",
+    properties: {
+      expression: {
+        type: "string",
+        description:
+          "A mathematical expression such as 25 * 4 + 10 or (100 / 5) + 7",
+      },
+    },
+    required: ["expression"],
+  },
+};
+
+const webSearchTool = {
+  name: "web_search",
+  description:
+    "Search the live web when the user asks for current, latest, recent, news, prices, weather, stock information, or other information that may have changed.",
+  parameters: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description: "The exact search query to search on the web.",
+      },
+    },
+    required: ["query"],
+  },
+};
+
+function calculateExpression(expression) {
+  try {
+    const { evaluate } = require("mathjs");
+
+    const result = evaluate(expression);
+
+    return {
+      success: true,
+      result: String(result),
+    };
+  } catch (error) {
+    return {
+      success: false,
+      result: "Invalid mathematical expression",
+    };
+  }
+}
 
 // =========================
 // MEMORY API
@@ -62,7 +112,53 @@ User message: "${messages}"`;
     const response = await ai.models.generateContent({
       model: "gemini-3.6-flash",
       contents: [{ role: "user", parts: [{ text: prompt }] }],
-    });
+        });
+
+    const functionCall = response.functionCalls?.[0];
+
+if (functionCall) {
+  console.log("🔧 Tool called:", functionCall.name);
+  console.log("📦 Arguments:", functionCall.args);
+
+  let toolResult;
+
+  if (functionCall.name === "calculate") {
+    toolResult = calculateExpression(
+      functionCall.args.expression
+    );
+  }
+
+  contents.push(response.candidates[0].content);
+
+  contents.push({
+    role: "user",
+    parts: [
+      {
+        functionResponse: {
+          name: functionCall.name,
+          response: toolResult,
+        },
+      },
+    ],
+  });
+
+  const finalResponse = await ai.models.generateContent({
+    model: "gemini-3.6-flash",
+    contents,
+    config: {
+      tools: [
+        {
+          functionDeclarations: [calculateTool,webSearchTool],
+        },
+      ],
+    },
+  });
+
+  return res.json({
+    success: true,
+    reply: finalResponse.text,
+  });
+}
 
     let text = response.text.trim()
       .replace(/^```json\s*/i, "")
@@ -216,13 +312,23 @@ res.status(500).json({
 // =========================
 app.post("/api/chat", async (req, res) => {
   try {
-    const { message, history = [], memories = [],useWeb = false } = req.body;
+    const {
+      message,
+      history = [],
+      memories = [],
+    } = req.body;
 
     if (!message || !message.trim()) {
-      return res.status(400).json({ success: false, error: "Message is required" });
+      return res.status(400).json({
+        success: false,
+        error: "Message is required",
+      });
     }
 
-    // Build conversation history in Gemini format
+    // =========================
+    // BUILD CONVERSATION HISTORY
+    // =========================
+
     const contents = history
       .filter(
         (item) =>
@@ -235,88 +341,107 @@ app.post("/api/chat", async (req, res) => {
         parts: [{ text: item.content }],
       }));
 
-    // Add current message if not already at end
+    // Add current message if not already at the end
     const lastMessage = contents[contents.length - 1];
+
     if (
       !lastMessage ||
       lastMessage.role !== "user" ||
       lastMessage.parts[0].text !== message
     ) {
-      contents.push({ role: "user", parts: [{ text: message }] });
+      contents.push({
+        role: "user",
+        parts: [{ text: message }],
+      });
     }
 
-    // Inject memory context at the beginning
+    // =========================
+    // MEMORY CONTEXT
+    // =========================
+
     if (memories.length > 0) {
-      const memoryContext = `The following are long-term memories about the user. Use them only when relevant. Do not mention that you have a memory system unless the user asks.\n\nUser memories:\n${memories.map((m) => `- ${m}`).join("\n")}`;
+      const memoryContext = `
+The following are long-term memories about the user.
+Use them only when relevant.
+Do not mention the memory system unless the user asks.
+
+User memories:
+${memories.map((m) => `- ${m}`).join("\n")}
+`;
 
       contents.unshift({
         role: "model",
-        parts: [{ text: "Understood. I will use these memories when relevant." }],
+        parts: [
+          {
+            text: "Understood. I will use these memories when relevant.",
+          },
+        ],
       });
+
       contents.unshift({
         role: "user",
         parts: [{ text: memoryContext }],
       });
     }
+
     // =========================
-// AUTOMATIC WEB SEARCH DETECTION
-// =========================
-
-const webSearchKeywords = [
-  "latest",
-  "today",
-  "current",
-  "now",
-  "recent",
-  "news",
-  "this week",
-  "this month",
-  "2026",
-  "price",
-  "weather",
-  "stock",
-  "release",
-  "released",
-  "new version",
-  "what happened",
-];
-
-const lowerMessage = message.toLowerCase();
-
-const shouldSearchWeb = webSearchKeywords.some((keyword) =>
-  lowerMessage.includes(keyword)
-);
-
-console.log(
-  `Web search: ${shouldSearchWeb ? "YES 🌐" : "NO 🧠"} → ${message}`
-);
+    // AUTOMATIC WEB SEARCH
     // =========================
-// WEB SEARCH CONTEXT
-// =========================
 
-let webContext = "";
+    const webSearchKeywords = [
+      "latest",
+      "today",
+      "current",
+      "now",
+      "recent",
+      "news",
+      "this week",
+      "this month",
+      "2026",
+      "price",
+      "weather",
+      "stock",
+      "release",
+      "released",
+      "new version",
+      "what happened",
+    ];
 
-if (shouldSearchWeb) {
-  try {
-    const searchResponse = await axios.post(
-      "https://api.tavily.com/search",
-      {
-        api_key: process.env.TAVILY_API_KEY,
-        query: message.trim(),
-        search_depth: "advanced",
-        max_results: 5,
-        include_answer: true,
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
+    const lowerMessage = message.toLowerCase();
+
+    const shouldSearchWeb = webSearchKeywords.some((keyword) =>
+      lowerMessage.includes(keyword)
     );
 
-    const searchData = searchResponse.data;
+    console.log(
+      `Web search: ${shouldSearchWeb ? "YES 🌐" : "NO 🧠"} → ${message}`
+    );
 
-    webContext = `
+    // =========================
+    // TAVILY WEB SEARCH
+    // =========================
+
+    if (shouldSearchWeb) {
+      try {
+        const searchResponse = await axios.post(
+          "https://api.tavily.com/search",
+          {
+            api_key: process.env.TAVILY_API_KEY,
+            query: message.trim(),
+            search_depth: "advanced",
+            max_results: 5,
+            include_answer: true,
+          },
+          {
+            headers: {
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        const searchData = searchResponse.data;
+
+        const webContext = `
 The user requested web search.
 
 Use the following live web search results to answer the user's question.
@@ -341,82 +466,161 @@ Important:
 - Mention relevant sources naturally in your answer.
 `;
 
-    contents.unshift({
-      role: "user",
-      parts: [{ text: webContext }],
-    });
+        contents.unshift({
+          role: "model",
+          parts: [
+            {
+              text: "Understood. I will use the provided web search results when answering.",
+            },
+          ],
+        });
 
-    contents.unshift({
-      role: "model",
-      parts: [
-        {
-          text: "Understood. I will use the provided web search results when answering.",
-        },
-      ],
-    });
-  } catch (searchError) {
-    console.error(
-      "Web search inside chat failed:",
-      searchError.response?.data || searchError.message
-    );
-  }
-}
+        contents.unshift({
+          role: "user",
+          parts: [{ text: webContext }],
+        });
+      } catch (searchError) {
+        console.error(
+          "Web search inside chat failed:",
+          searchError.response?.data || searchError.message
+        );
+      }
+    }
+
+    // =========================
+    // GEMINI + TOOL CALLING
+    // =========================
 
     const response = await ai.models.generateContent({
       model: "gemini-3.6-flash",
       contents,
+      config: {
+        tools: [
+          {
+            functionDeclarations: [calculateTool],
+          },
+        ],
+      },
     });
 
-    res.json({ success: true, reply: response.text });
-  } catch (error) {
-    console.error("Gemini API Error:", error);
-    res.status(500).json({ success: false, error: "Failed to generate AI response" });
-  }
-});
-// =========================
-// WEB SEARCH API
-// =========================
-app.post("/api/search", async (req, res) => {
-  try {
-    const { query } = req.body;
+    // =========================
+    // CHECK FOR TOOL CALL
+    // =========================
 
-    if (!query || !query.trim()) {
-      return res.status(400).json({
+    const functionCall = response.functionCalls?.[0];
+
+if (functionCall) {
+  console.log("🔧 Tool called:", functionCall.name);
+  console.log("📦 Arguments:", functionCall.args);
+
+  let toolResult;
+
+  // =========================
+  // CALCULATOR TOOL
+  // =========================
+
+  if (functionCall.name === "calculate") {
+    toolResult = calculateExpression(
+      functionCall.args.expression
+    );
+  }
+
+  // =========================
+  // WEB SEARCH TOOL
+  // =========================
+
+  else if (functionCall.name === "web_search") {
+    try {
+      const searchResponse = await axios.post(
+        "https://api.tavily.com/search",
+        {
+          api_key: process.env.TAVILY_API_KEY,
+          query: functionCall.args.query,
+          search_depth: "advanced",
+          max_results: 5,
+          include_answer: true,
+        },
+        {
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      const searchData = searchResponse.data;
+
+      toolResult = {
+        success: true,
+        answer: searchData.answer || "No direct answer found.",
+        results: (searchData.results || []).map((result) => ({
+          title: result.title,
+          url: result.url,
+          content: result.content,
+        })),
+      };
+
+      console.log("🌐 Web search completed");
+    } catch (searchError) {
+      console.error(
+        "❌ Web search tool failed:",
+        searchError.response?.data || searchError.message
+      );
+
+      toolResult = {
         success: false,
-        error: "Search query is required",
+        error: "Web search failed",
+      };
+    }
+  }
+      // Add Gemini's tool request to conversation
+      contents.push(response.candidates[0].content);
+
+      // Add tool result
+      contents.push({
+        role: "user",
+        parts: [
+          {
+            functionResponse: {
+              name: functionCall.name,
+              response: toolResult,
+            },
+          },
+        ],
+      });
+
+      // Ask Gemini to generate final answer using tool result
+      const finalResponse = await ai.models.generateContent({
+        model: "gemini-3.6-flash",
+        contents,
+        config: {
+          tools: [
+            {
+              functionDeclarations: [calculateTool],
+            },
+          ],
+        },
+      });
+
+      return res.json({
+        success: true,
+        reply: finalResponse.text,
       });
     }
 
-    const response = await axios.post(
-      "https://api.tavily.com/search",
-      {
-        api_key: process.env.TAVILY_API_KEY,
-        query: query.trim(),
-        search_depth: "advanced",
-        max_results: 5,
-        include_answer: true,
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    // =========================
+    // NORMAL RESPONSE
+    // =========================
 
-    res.json({
+    return res.json({
       success: true,
-      answer: response.data.answer,
-      results: response.data.results,
+      reply: response.text,
     });
   } catch (error) {
-    console.error(
-      "Tavily Search Error:",
-      error.response?.data || error.message
-    );
+    console.error("Gemini API Error:", error);
 
     res.status(500).json({
       success: false,
-      error: "Web search failed",
+      error: "Failed to generate AI response",
     });
   }
 });
