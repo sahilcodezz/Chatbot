@@ -3,11 +3,22 @@ const cors = require("cors");
 const dotenv = require("dotenv");
 const { GoogleGenAI } = require("@google/genai");
 const axios = require("axios");
+const mongoose = require("mongoose");
 
 
 dotenv.config();
+console.log("MongoDB URI loaded:", !!process.env.MONGODB_URI);
 
 const app = express();
+
+mongoose
+  .connect(process.env.MONGODB_URI)
+  .then(() => {
+    console.log("MongoDB connected successfully ✅");
+  })
+  .catch((error) => {
+    console.error("MongoDB connection failed ❌", error.message);
+  });
 const PORT = process.env.PORT || 5000;
 
 app.use(cors());
