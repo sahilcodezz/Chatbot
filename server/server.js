@@ -1,10 +1,13 @@
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
+const dns = require("dns");
 const { GoogleGenAI } = require("@google/genai");
 const axios = require("axios");
 const mongoose = require("mongoose");
 
+// Fix for querySrv ECONNREFUSED on Windows / local ISP DNS
+dns.setServers(["8.8.8.8", "8.8.4.4"]);
 
 dotenv.config();
 console.log("MongoDB URI loaded:", !!process.env.MONGODB_URI);
@@ -24,8 +27,17 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 const authRoutes = require("./routes/auth");
+const authMiddleware = require("./middleware/middleware");
 
 app.use("/api/auth", authRoutes);
+
+app.get("/api/protected", authMiddleware, (req, res) => {
+  res.json({
+    success: true,
+    message: "You accessed a protected route 🔐",
+    userId: req.user.userId,
+  });
+});
 const multer = require("multer");
 const pdfParse = require("pdf-parse");
 
@@ -121,7 +133,7 @@ OR
 User message: "${messages}"`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
+      model: "gemini-2.0-flash",
       contents: [{ role: "user", parts: [{ text: prompt }] }],
         });
 
@@ -154,7 +166,7 @@ if (functionCall) {
   });
 
   const finalResponse = await ai.models.generateContent({
-    model: "gemini-3.6-flash",
+    model: "gemini-2.0-flash",
     contents,
     config: {
       tools: [
@@ -226,7 +238,7 @@ Existing memories:
 ${memories.map((memory) => `- ${memory}`).join("\n")}`;
 
 const response = await ai.models.generateContent({
-  model: "gemini-3.6-flash",
+  model: "gemini-2.0-flash",
   contents: [
     {
       role: "user",
@@ -503,7 +515,7 @@ Important:
     // =========================
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
+      model: "gemini-2.0-flash",
       contents,
       config: {
         tools: [
@@ -601,7 +613,7 @@ if (functionCall) {
 
       // Ask Gemini to generate final answer using tool result
       const finalResponse = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
+        model: "gemini-2.0-flash",
         contents,
         config: {
           tools: [

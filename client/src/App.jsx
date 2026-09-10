@@ -3,6 +3,7 @@ import { useEffect, useState, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { motion, AnimatePresence } from "framer-motion";
+import AuthPage from "./AuthPage";
 
 const STORAGE_KEY = "ai-chat-history";
 const MEMORY_KEY = "ai-chat-memories";
@@ -113,6 +114,12 @@ function AIMarkdown({ content, messageId, copiedId, onCopy }) {
 
 // ════════════════════════════════════════════════════════════════════════════
 export default function App() {
+  // ── Auth State ─────────────────────────────────────────────────────────
+  const [authUser, setAuthUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("auth-user")) || null; }
+    catch { return null; }
+  });
+
   // ── State ───────────
   // ─────────────────────────────────────────────────────
 
@@ -140,10 +147,24 @@ export default function App() {
   const [editingId, setEditingId]     = useState(null);
   const [editText, setEditText]       = useState("");
   const [memoryOpen, setMemoryOpen]   = useState(false);
+  const [darkMode, setDarkMode]       = useState(() => {
+    try { return localStorage.getItem("dark-mode") === "true"; }
+    catch { return false; }
+  });
 
   const messagesEndRef    = useRef(null);
   const abortControllerRef = useRef(null);
   const textareaRef        = useRef(null);
+
+  // ── Dark mode effect ─────────────────────────────────────────────────────
+  useEffect(() => {
+    localStorage.setItem("dark-mode", darkMode);
+    if (darkMode) {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
+  }, [darkMode]);
 
   // ── Persistence ──────────────────────────────────────────────────────────
   useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(chats)); }, [chats]);
@@ -454,11 +475,28 @@ const startVoiceInput = () => {
 
 // RENDER
 
+  // ── Auth handlers ────────────────────────────────────────────────────────
+  const handleAuth = (user) => {
+    setAuthUser(user);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("auth-token");
+    localStorage.removeItem("auth-user");
+    setAuthUser(null);
+  };
+
   // ════════════════════════════════════════════════════════════════════════
   // RENDER
   // ════════════════════════════════════════════════════════════════════════
+
+  // Show auth page if not logged in
+  if (!authUser) {
+    return <AuthPage onAuth={handleAuth} />;
+  }
+
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f8fafc] text-slate-900">
+    <div className="flex h-screen overflow-hidden bg-[#f8fafc] dark:bg-slate-950 text-slate-900 dark:text-slate-100">
 
       {/* ── Mobile overlay ─────────────────────────────────────────────── */}
       <AnimatePresence>
@@ -481,23 +519,25 @@ const startVoiceInput = () => {
       <aside
         className={`
           fixed inset-y-0 left-0 z-50 flex w-[260px] flex-col
-          border-r border-slate-200 bg-white
+          border-r border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900
           transition-transform duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1)]
           lg:relative lg:translate-x-0
           ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
         `}
       >
         {/* Logo */}
-        <div className="flex h-[60px] shrink-0 items-center justify-between border-b border-slate-100 px-4">
+        <div className="flex h-[60px] shrink-0 items-center justify-between border-b border-slate-100 dark:border-slate-700 px-4">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-[11px] font-bold text-white">
-              AI
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-blue-600 text-[11px] font-bold text-white shadow shadow-violet-200">
+              N
             </div>
-            <span className="text-[13px] font-semibold tracking-tight text-slate-900">AI Assistant</span>
+            <span className="text-[13px] font-bold tracking-tight text-slate-900 dark:text-white">
+              Nova<span className="text-violet-500">Mind</span>
+            </span>
           </div>
           <button
             onClick={() => setSidebarOpen(false)}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 lg:hidden"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 lg:hidden dark:hover:bg-slate-700"
           >
             ✕
           </button>
@@ -684,13 +724,21 @@ const startVoiceInput = () => {
         <div className="shrink-0 border-t border-slate-100 p-3">
           <div className="flex items-center gap-2.5 rounded-lg px-2.5 py-2">
             <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-blue-700 text-[11px] font-bold text-white">
-              S
+              {authUser?.name?.[0]?.toUpperCase() || "U"}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-[11px] font-semibold text-slate-700">Sahil</p>
-              <p className="text-[9px] text-slate-400">Free plan</p>
+              <p className="text-[11px] font-semibold text-slate-700 truncate">{authUser?.name || "User"}</p>
+              <p className="text-[9px] text-slate-400 truncate">{authUser?.email || ""}</p>
             </div>
-            <span className="text-slate-300 text-xs">•••</span>
+            <button
+              onClick={handleLogout}
+              title="Logout"
+              className="flex h-6 w-6 items-center justify-center rounded-md text-slate-300 transition hover:bg-red-50 hover:text-red-500"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h6a2 2 0 012 2v1" />
+              </svg>
+            </button>
           </div>
         </div>
       </aside>
@@ -698,23 +746,23 @@ const startVoiceInput = () => {
       {/* ══════════════════════════════════════════════════════════════════
           MAIN
       ══════════════════════════════════════════════════════════════════ */}
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-white dark:bg-slate-950">
 
         {/* Top bar */}
         <header className="flex h-[60px] shrink-0 items-center justify-between
-          border-b border-slate-200 bg-white px-4 sm:px-5">
+          border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 sm:px-5">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setSidebarOpen(true)}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200
-                text-slate-400 transition hover:bg-slate-50 hover:text-slate-600 lg:hidden"
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 dark:border-slate-700
+                text-slate-400 transition hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-600 lg:hidden"
             >
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
               </svg>
             </button>
             <div>
-              <h2 className="text-[13px] font-semibold text-slate-900 leading-tight">
+              <h2 className="text-[13px] font-semibold text-slate-900 dark:text-white leading-tight">
                 {currentChat?.title || "New conversation"}
               </h2>
               <div className="flex items-center gap-1.5 mt-0.5">
@@ -725,18 +773,29 @@ const startVoiceInput = () => {
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="hidden items-center gap-1.5 rounded-lg border border-slate-200
-              bg-white px-3 py-1.5 shadow-sm sm:flex">
-              <span className="text-[11px] font-medium text-slate-500">Gemini</span>
-              <svg className="h-3 w-3 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-              </svg>
+            {/* Model badge */}
+            <div className="hidden items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700
+              bg-white dark:bg-slate-800 px-3 py-1.5 shadow-sm sm:flex">
+              <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
+              <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Gemini 2.0 Flash</span>
             </div>
-            <button className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200
-              text-slate-400 transition hover:bg-slate-50 hover:text-slate-600" title="Share">
-              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m6.632 8.342a3 3 0 10-5.368-2.684m5.368 2.684a3 3 0 100-4m0 4v-4" />
-              </svg>
+
+            {/* Dark mode toggle */}
+            <button
+              onClick={() => setDarkMode((v) => !v)}
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 dark:border-slate-700
+                text-slate-400 dark:text-slate-400 transition hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-600"
+              title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
+            >
+              {darkMode ? (
+                <svg className="h-4 w-4 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707M17.657 17.657l-.707-.707M6.343 6.343l-.707-.707M12 7a5 5 0 100 10A5 5 0 0012 7z" />
+                </svg>
+              ) : (
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 12.79A9 9 0 1111.21 3a7 7 0 009.79 9.79z" />
+                </svg>
+              )}
             </button>
           </div>
         </header>
