@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const User = require('../models/user');
+const jwt = require("jsonwebtoken");
 
 const router = express.Router();
 
@@ -96,7 +96,7 @@ router.post("/login", async (req, res) => {
       {
         userId: user._id,
       },
-      process.env.JWT_SECRET || "chatbot_jwt_secret_key_2026",
+      process.env.JWT_SECRET,
       {
         expiresIn: "7d",
       }

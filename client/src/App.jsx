@@ -462,7 +462,47 @@ const startVoiceInput = () => {
 
 
   // ── Speak ─────────────────────────────────────────────────────────────
- 
+  const speakMessage = (text) => {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.lang = "en-US";
+    window.speechSynthesis.speak(utterance);
+  };
+
+  // ── Export chat as Markdown ───────────────────────────────────────────
+  const exportChat = (chat) => {
+    let md = `# ${chat.title}\n\n`;
+    chat.messages.forEach((msg) => {
+      const role = msg.role === "user" ? "You" : "AI";
+      md += `### ${role}\n${msg.content}\n\n`;
+    });
+    const blob = new Blob([md], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${chat.title.replace(/[^a-zA-Z0-9]/g, "_")}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ── Keyboard shortcuts ────────────────────────────────────────────────
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.ctrlKey && e.key === "n") {
+        e.preventDefault();
+        createNewChat();
+      }
+      if (e.ctrlKey && e.key === "k") {
+        e.preventDefault();
+        document.querySelector('input[placeholder="Search…"]')?.focus();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
   const copyCode = async (code, id) => {
   try {
     await navigator.clipboard.writeText(code);
@@ -518,7 +558,7 @@ const startVoiceInput = () => {
       ══════════════════════════════════════════════════════════════════ */}
       <aside
         className={`
-          fixed inset-y-0 left-0 z-50 flex w-[260px] flex-col
+          fixed inset-y-0 left-0 z-50 flex w-[320px] flex-col
           border-r border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900
           transition-transform duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1)]
           lg:relative lg:translate-x-0
@@ -548,8 +588,8 @@ const startVoiceInput = () => {
           <button
             onClick={createNewChat}
             className="flex h-9 w-full items-center justify-center gap-2 rounded-lg
-              border border-slate-200 bg-white text-[12px] font-medium text-slate-600
-              shadow-sm transition-all duration-150 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+              border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-[12px] font-medium text-slate-600 dark:text-slate-300
+              shadow-sm transition-all duration-150 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-slate-700 dark:hover:text-white"
           >
             <span className="text-base leading-none">+</span>
             New conversation
@@ -558,9 +598,9 @@ const startVoiceInput = () => {
 
         {/* Search */}
         <div className="px-3 pb-2">
-          <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50
+          <div className="flex items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800
             px-3 py-2 focus-within:border-blue-400 transition-colors duration-150">
-            <svg className="h-3.5 w-3.5 shrink-0 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <svg className="h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
             </svg>
             <input
@@ -568,17 +608,17 @@ const startVoiceInput = () => {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search…"
-              className="min-w-0 flex-1 bg-transparent text-[11px] text-slate-600 outline-none placeholder:text-slate-400"
+              className="min-w-0 flex-1 bg-transparent text-[11px] text-slate-600 dark:text-slate-300 outline-none placeholder:text-slate-400 dark:placeholder:text-slate-500"
             />
             {searchQuery && (
-              <button onClick={() => setSearchQuery("")} className="text-[11px] text-slate-400 hover:text-slate-600">✕</button>
+              <button onClick={() => setSearchQuery("")} className="text-[11px] text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300">✕</button>
             )}
           </div>
         </div>
 
         {/* Chat list */}
         <div className="min-h-0 flex-1 overflow-y-auto px-2">
-          <p className="mb-1.5 px-2 pt-1 text-[9px] font-semibold uppercase tracking-[0.15em] text-slate-400">
+          <p className="mb-1.5 px-2 pt-1 text-[9px] font-semibold uppercase tracking-[0.15em] text-slate-400 dark:text-slate-500">
             Conversations
           </p>
 
@@ -589,6 +629,7 @@ const startVoiceInput = () => {
               </p>
             </div>
           ) : (
+            <>
             <div className="space-y-0.5 pb-2">
               {filteredChats.map((chat) => (
                 <motion.div
@@ -597,8 +638,8 @@ const startVoiceInput = () => {
                   onClick={() => openChat(chat.id)}
                   className={`group flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2.5 transition-colors duration-100
                     ${activeChat === chat.id
-                      ? "bg-blue-50 text-blue-700"
-                      : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+                      ? "bg-blue-50 dark:bg-blue-500/15 text-blue-700 dark:text-blue-400"
+                      : "text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-slate-200"
                     }`}
                 >
                   <svg className="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
@@ -613,23 +654,59 @@ const startVoiceInput = () => {
                       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                     </svg>
                   </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); exportChat(chat); }}
+                    className="hidden text-slate-300 transition hover:text-blue-500 group-hover:block"
+                    title="Export as Markdown"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const dup = { ...chat, id: Date.now(), title: chat.title + " (copy)", time: "Now" };
+                      setChats((prev) => [dup, ...prev]);
+                    }}
+                    className="hidden text-slate-300 transition hover:text-emerald-500 group-hover:block"
+                    title="Duplicate chat"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  </button>
                 </motion.div>
               ))}
             </div>
+            {chats.length > 0 && (
+              <div className="px-2 pb-2">
+                <button
+                  onClick={() => { if (window.confirm("Delete all conversations?")) { setChats([]); setActiveChat(null); } }}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-red-200 dark:border-red-500/20 py-1.5 text-[10px] font-medium text-red-400 dark:text-red-400 transition hover:bg-red-50 dark:hover:bg-red-500/10 hover:text-red-500"
+                >
+                  <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  Clear All
+                </button>
+              </div>
+            )}
+            </>
           )}
         </div>
 
         {/* Memory section */}
-        <div className="shrink-0 border-t border-slate-100">
+        <div className="shrink-0 border-t border-slate-100 dark:border-slate-700">
           <button
             onClick={() => setMemoryOpen((v) => !v)}
-            className="flex w-full items-center gap-2 px-4 py-3 text-left transition hover:bg-slate-50"
+            className="flex w-full items-center gap-2 px-4 py-3 text-left transition hover:bg-slate-50 dark:hover:bg-slate-800"
           >
             <span className="text-sm">🧠</span>
-            <span className="flex-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+            <span className="flex-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400 dark:text-slate-500">
               AI Memory
             </span>
-            <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-400">
+            <span className="rounded-full bg-slate-100 dark:bg-slate-700 px-1.5 py-0.5 text-[9px] text-slate-400 dark:text-slate-400">
               {memories.length}
             </span>
             <svg
@@ -652,7 +729,7 @@ const startVoiceInput = () => {
               >
                 <div className="px-3 pb-3">
                   {memories.length === 0 ? (
-                    <p className="rounded-lg bg-slate-50 px-3 py-3 text-[10px] text-slate-400">
+                    <p className="rounded-lg bg-slate-50 dark:bg-slate-800 px-3 py-3 text-[10px] text-slate-400 dark:text-slate-500">
                       No memories saved yet.
                     </p>
                   ) : (
@@ -660,9 +737,9 @@ const startVoiceInput = () => {
                       {memories.map((memory, index) => (
                         <div
                           key={`${memory}-${index}`}
-                          className="group flex items-start gap-2 rounded-lg px-2 py-2 transition hover:bg-slate-50"
+                          className="group flex items-start gap-2 rounded-lg px-2 py-2 transition hover:bg-slate-50 dark:hover:bg-slate-800"
                         >
-                          <p className="flex-1 text-[10px] leading-4 text-slate-500">{memory}</p>
+                          <p className="flex-1 text-[10px] leading-4 text-slate-500 dark:text-slate-400">{memory}</p>
                           <button
                             onClick={() => deleteMemory(index)}
                             className="mt-0.5 hidden text-slate-300 transition hover:text-red-500 group-hover:block"
@@ -675,31 +752,30 @@ const startVoiceInput = () => {
                       ))}
                     </div>
                   )}
-
                   <div className="mt-2 flex gap-1.5">
                     <button
                       onClick={addMemory}
-                      className="flex-1 rounded-lg border border-slate-200 py-1.5 text-[10px] text-slate-500
-                        transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600"
+                      className="flex-1 rounded-lg border border-slate-200 dark:border-slate-700 py-1.5 text-[10px] text-slate-500 dark:text-slate-400
+                        transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-slate-700 dark:hover:text-blue-400"
                     >
                       + Add
                     </button>
                     <button
-  onClick={startVoiceInput}
-  className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm transition ${
-    isListening
-      ? "bg-red-100 text-red-600"
-      : "text-slate-400 hover:bg-slate-100"
-  }`}
-  title={isListening ? "Stop listening" : "Voice input"}
->
-  {isListening ? "🔴" : "🎤"}
-</button>
+                      onClick={startVoiceInput}
+                      className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm transition ${
+                        isListening
+                          ? "bg-red-100 text-red-600"
+                          : "text-slate-400 dark:text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700"
+                      }`}
+                      title={isListening ? "Stop listening" : "Voice input"}
+                    >
+                      {isListening ? "🔴" : "🎤"}
+                    </button>
                     {memories.length >= 2 && (
                       <button
                         onClick={consolidateMemories}
-                        className="flex-1 rounded-lg border border-slate-200 py-1.5 text-[10px] text-slate-500
-                          transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700"
+                        className="flex-1 rounded-lg border border-slate-200 dark:border-slate-700 py-1.5 text-[10px] text-slate-500 dark:text-slate-400
+                          transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 dark:hover:bg-slate-700 dark:hover:text-slate-200"
                       >
                         Organize
                       </button>
@@ -707,8 +783,8 @@ const startVoiceInput = () => {
                     {memories.length > 0 && (
                       <button
                         onClick={clearMemories}
-                        className="flex-1 rounded-lg border border-slate-200 py-1.5 text-[10px] text-slate-500
-                          transition hover:border-red-200 hover:bg-red-50 hover:text-red-500"
+                        className="flex-1 rounded-lg border border-slate-200 dark:border-slate-700 py-1.5 text-[10px] text-slate-500 dark:text-slate-400
+                          transition hover:border-red-200 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-500/10 dark:hover:text-red-400"
                       >
                         Clear
                       </button>
@@ -721,14 +797,14 @@ const startVoiceInput = () => {
         </div>
 
         {/* User footer */}
-        <div className="shrink-0 border-t border-slate-100 p-3">
+        <div className="shrink-0 border-t border-slate-100 dark:border-slate-700 p-3">
           <div className="flex items-center gap-2.5 rounded-lg px-2.5 py-2">
             <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-blue-700 text-[11px] font-bold text-white">
               {authUser?.name?.[0]?.toUpperCase() || "U"}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-[11px] font-semibold text-slate-700 truncate">{authUser?.name || "User"}</p>
-              <p className="text-[9px] text-slate-400 truncate">{authUser?.email || ""}</p>
+              <p className="text-[11px] font-semibold text-slate-700 dark:text-slate-200 truncate">{authUser?.name || "User"}</p>
+              <p className="text-[9px] text-slate-400 dark:text-slate-500 truncate">{authUser?.email || ""}</p>
             </div>
             <button
               onClick={handleLogout}
@@ -773,11 +849,30 @@ const startVoiceInput = () => {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Copy all messages */}
+            {messages.length > 0 && (
+              <button
+                onClick={() => {
+                  const text = messages.map((m) => `${m.role === "user" ? "You" : "AI"}:\n${m.content}`).join("\n\n");
+                  navigator.clipboard.writeText(text);
+                }}
+                className="flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700
+                  bg-white dark:bg-slate-800 px-2.5 text-[10px] font-medium text-slate-500 dark:text-slate-400
+                  transition hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-600"
+                title="Copy entire chat"
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                </svg>
+                <span className="hidden sm:inline">Copy Chat</span>
+              </button>
+            )}
+
             {/* Model badge */}
             <div className="hidden items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700
               bg-white dark:bg-slate-800 px-3 py-1.5 shadow-sm sm:flex">
               <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
-              <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Gemini 2.0 Flash</span>
+              <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Gemini 3.6 Flash</span>
             </div>
 
             {/* Dark mode toggle */}
@@ -840,7 +935,7 @@ const startVoiceInput = () => {
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.15, duration: 0.35 }}
-                className="text-center text-[28px] font-semibold tracking-tight text-slate-900 sm:text-[36px]"
+                className="text-center text-[28px] font-semibold tracking-tight text-slate-900 dark:text-white sm:text-[36px]"
               >
                 How can I help you?
               </motion.h1>
@@ -849,7 +944,7 @@ const startVoiceInput = () => {
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.2, duration: 0.3 }}
-                className="mt-3 max-w-md text-center text-[13px] leading-6 text-slate-400"
+                className="mt-3 max-w-md text-center text-[13px] leading-6 text-slate-400 dark:text-slate-400"
               >
                 Ask questions, write code, prep for interviews, or brainstorm your next idea.
               </motion.p>
@@ -870,22 +965,22 @@ const startVoiceInput = () => {
                     onClick={() => setInput(item.text)}
                     whileHover={{ y: -2 }}
                     whileTap={{ scale: 0.98 }}
-                    className="group flex items-center gap-3.5 rounded-xl border border-slate-200
-                      bg-white p-4 text-left shadow-sm transition-colors duration-150
-                      hover:border-blue-200 hover:bg-blue-50/50"
+                    className="group flex items-center gap-3.5 rounded-xl border border-slate-200 dark:border-slate-700
+                      bg-white dark:bg-slate-800 p-4 text-left shadow-sm transition-colors duration-150
+                      hover:border-blue-200 dark:hover:border-blue-500/30 hover:bg-blue-50/50 dark:hover:bg-slate-700"
                   >
                     <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg
-                      bg-blue-50 text-sm font-semibold text-blue-500
-                      transition group-hover:bg-blue-100 group-hover:text-blue-600">
+                      bg-blue-50 dark:bg-blue-500/15 text-sm font-semibold text-blue-500 dark:text-blue-400
+                      transition group-hover:bg-blue-100 dark:group-hover:bg-blue-500/25 group-hover:text-blue-600">
                       {item.icon}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-[12px] font-semibold text-slate-700 group-hover:text-slate-900 transition">
+                      <p className="text-[12px] font-semibold text-slate-700 dark:text-slate-200 group-hover:text-slate-900 dark:group-hover:text-white transition">
                         {item.title}
                       </p>
-                      <p className="mt-0.5 truncate text-[10px] text-slate-400">{item.text}</p>
+                      <p className="mt-0.5 truncate text-[10px] text-slate-400 dark:text-slate-500">{item.text}</p>
                     </div>
-                    <svg className="h-3.5 w-3.5 shrink-0 text-slate-300 transition group-hover:text-blue-500"
+                    <svg className="h-3.5 w-3.5 shrink-0 text-slate-300 dark:text-slate-600 transition group-hover:text-blue-500"
                       fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                     </svg>
@@ -920,6 +1015,9 @@ const startVoiceInput = () => {
                       <div className={`min-w-0 max-w-[82%] ${message.role === "user" ? "flex flex-col items-end" : ""}`}>
                         <p className="mb-1.5 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
                           {message.role === "user" ? "You" : "AI Assistant"}
+                          <span className="ml-2 normal-case tracking-normal font-normal opacity-60">
+                            {new Date(message.id).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          </span>
                         </p>
 
                         {/* User bubble */}
@@ -1070,9 +1168,9 @@ const startVoiceInput = () => {
         </section>
 
         {/* ── Input bar ───────────────────────────────────────────────── */}
-        <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-4 sm:px-5">
+        <div className="shrink-0 border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 py-4 sm:px-5">
           <div className="mx-auto max-w-3xl">
-            <div className="input-glow overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-colors duration-150">
+            <div className="input-glow overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm transition-colors duration-150">
               <textarea
                 ref={textareaRef}
                 value={input}
@@ -1081,19 +1179,19 @@ const startVoiceInput = () => {
                 rows={1}
                 placeholder="Message AI Assistant…"
                 className="block min-h-[52px] w-full resize-none bg-transparent
-                  px-4 pt-[14px] text-[13px] text-slate-800 outline-none
-                  placeholder:text-slate-400 leading-6"
+                  px-4 pt-[14px] text-[13px] text-slate-800 dark:text-slate-200 outline-none
+                  placeholder:text-slate-400 dark:placeholder:text-slate-500 leading-6"
               />
               <div className="flex items-center justify-between px-3 pb-3">
                 <div className="flex items-center gap-1">
                   <button className="flex h-7 w-7 items-center justify-center rounded-lg
-                    text-slate-400 transition hover:bg-slate-100 hover:text-slate-600">
+                    text-slate-400 dark:text-slate-500 transition hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-600 dark:hover:text-slate-300">
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
                     </svg>
                   </button>
-                  <span className="ml-1 hidden text-[9px] font-medium uppercase tracking-wider text-slate-300 sm:block">
-                    Enter to send · Shift+Enter for newline
+                  <span className="ml-1 hidden text-[9px] font-medium uppercase tracking-wider text-slate-300 dark:text-slate-600 sm:block">
+                    {input.trim() ? `${input.length} chars · ${input.trim().split(/\s+/).length} words` : "Enter to send · Shift+Enter for newline"}
                   </span>
                 </div>
 
@@ -1106,7 +1204,7 @@ const startVoiceInput = () => {
                       ? "bg-red-500 text-white hover:bg-red-600"
                       : input.trim()
                         ? "bg-blue-600 text-white shadow-md shadow-blue-600/20 hover:bg-blue-700"
-                        : "bg-slate-100 text-slate-400"
+                        : "bg-slate-100 dark:bg-slate-700 text-slate-400 dark:text-slate-500"
                     }`}
                 >
                   {isLoading ? (
@@ -1126,7 +1224,7 @@ const startVoiceInput = () => {
               </div>
             </div>
 
-            <p className="mt-2 text-center text-[9px] font-medium uppercase tracking-wider text-slate-300">
+            <p className="mt-2 text-center text-[9px] font-medium uppercase tracking-wider text-slate-300 dark:text-slate-600">
               AI can make mistakes — verify important information
             </p>
           </div>
