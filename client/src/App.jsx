@@ -7,7 +7,7 @@ import AuthPage from "./AuthPage";
 
 const STORAGE_KEY = "ai-chat-history";
 const MEMORY_KEY = "ai-chat-memories";
-
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 const suggestions = [
   { icon: "⚛", title: "Learn React", text: "Explain React hooks simply" },
   { icon: "</>", title: "Write code", text: "Create a JavaScript function" },
@@ -207,7 +207,7 @@ export default function App() {
   const consolidateMemories = async () => {
     if (memories.length < 2) return;
     try {
-      const res  = await fetch("http://localhost:5000/api/memory/consolidate", {
+      const res  = await fetch(`${API_URL}/api/memory`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ memories }),
@@ -232,7 +232,7 @@ export default function App() {
 
   const extraMemory = async (userText) => {
     try {
-      const res  = await fetch("http://localhost:5000/api/memory", {
+      const res  = await fetch(`${API_URL}/api/memory`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: userText }),
@@ -277,7 +277,7 @@ export default function App() {
     setChats((prev) => prev.map((c) => c.id === activeChat ? { ...c, messages: updated } : c));
     try {
       abortControllerRef.current = new AbortController();
-      const res  = await fetch("http://localhost:5000/api/chat", {
+      const res  = await fetch(`${API_URL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: newText, history }),
@@ -317,7 +317,7 @@ export default function App() {
     setIsLoading(true);
     try {
       abortControllerRef.current = new AbortController();
-      const res  = await fetch("http://localhost:5000/api/chat", {
+      const res  = await fetch(`${API_URL}/api/memory`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: userMsg.content, history }),
@@ -419,7 +419,7 @@ const startVoiceInput = () => {
     }
     try {
       abortControllerRef.current = new AbortController();
-      const res  = await fetch("http://localhost:5000/api/chat", {
+      const res  = await fetch(`${API_URL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: userText, history: chatHistory, memories,  }),
