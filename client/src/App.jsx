@@ -8,6 +8,27 @@ import AuthPage from "./AuthPage";
 const STORAGE_KEY = "ai-chat-history";
 const MEMORY_KEY = "ai-chat-memories";
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+
+// ── Retry-aware fetch helper (handles Render cold starts) ────────────────
+async function fetchWithRetry(url, options = {}, retries = 5) {
+  let lastErr;
+  for (let i = 0; i < retries; i++) {
+    try {
+      if (options.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      const res = await fetch(url, options);
+      return res;
+    } catch (err) {
+      lastErr = err;
+      if (options.signal?.aborted) throw err;
+      if (i < retries - 1) {
+        const backoff = i === 0 ? 5000 : i === 1 ? 8000 : 10000;
+        await new Promise((r) => setTimeout(r, backoff));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 const suggestions = [
   { icon: "⚛", title: "Learn React", text: "Explain React hooks simply" },
   { icon: "</>", title: "Write code", text: "Create a JavaScript function" },
@@ -207,7 +228,7 @@ export default function App() {
   const consolidateMemories = async () => {
     if (memories.length < 2) return;
     try {
-      const res  = await fetch(`${API_URL}/api/memory`, {
+      const res  = await fetch(`${API_URL}/api/memory/consolidate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ memories }),
@@ -277,7 +298,7 @@ export default function App() {
     setChats((prev) => prev.map((c) => c.id === activeChat ? { ...c, messages: updated } : c));
     try {
       abortControllerRef.current = new AbortController();
-      const res  = await fetch(`${API_URL}/api/chat`, {
+      const res  = await fetchWithRetry(`${API_URL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: newText, history }),
@@ -294,7 +315,7 @@ export default function App() {
       if (e.name === "AbortError") return;
       setChats((prev) => prev.map((c) =>
         c.id === activeChat
-          ? { ...c, messages: [...updated, { id: Date.now(), role: "assistant", content: "Unable to connect to the backend." }] }
+          ? { ...c, messages: [...updated, { id: Date.now(), role: "assistant", content: "Server is waking up, please try again." }] }
           : c
       ));
     } finally { setIsLoading(false); }
@@ -317,7 +338,7 @@ export default function App() {
     setIsLoading(true);
     try {
       abortControllerRef.current = new AbortController();
-      const res  = await fetch(`${API_URL}/api/memory`, {
+      const res  = await fetchWithRetry(`${API_URL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: userMsg.content, history }),
@@ -419,7 +440,7 @@ const startVoiceInput = () => {
     }
     try {
       abortControllerRef.current = new AbortController();
-      const res  = await fetch(`${API_URL}/api/chat`, {
+      const res  = await fetchWithRetry(`${API_URL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: userText, history: chatHistory, memories,  }),
@@ -436,7 +457,7 @@ const startVoiceInput = () => {
       if (e.name === "AbortError") return;
       setChats((prev) => prev.map((c) =>
         c.id === chatId
-          ? { ...c, messages: [...(c.messages || []), { id: Date.now() + 1, role: "assistant", content: "Unable to connect to the backend. Please make sure the server is running." }] }
+          ? { ...c, messages: [...(c.messages || []), { id: Date.now() + 1, role: "assistant", content: "Server is waking up, please try again in a few seconds." }] }
           : c
       ));
     } finally { setIsLoading(false); }
@@ -558,10 +579,10 @@ const startVoiceInput = () => {
       ══════════════════════════════════════════════════════════════════ */}
       <aside
         className={`
-          fixed inset-y-0 left-0 z-50 flex w-[320px] flex-col
+          fixed inset-y-0 left-0 z-50 flex w-[85vw] max-w-[320px] flex-col
           border-r border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900
           transition-transform duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1)]
-          lg:relative lg:translate-x-0
+          lg:relative lg:w-[320px] lg:max-w-none lg:translate-x-0
           ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
         `}
       >
@@ -825,8 +846,8 @@ const startVoiceInput = () => {
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-white dark:bg-slate-950">
 
         {/* Top bar */}
-        <header className="flex h-[60px] shrink-0 items-center justify-between
-          border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 sm:px-5">
+        <header className="flex h-[56px] sm:h-[60px] shrink-0 items-center justify-between
+          border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 sm:px-5">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setSidebarOpen(true)}
@@ -905,7 +926,7 @@ const startVoiceInput = () => {
               variants={fadeIn}
               initial="hidden"
               animate="show"
-              className="flex min-h-full flex-col items-center justify-center px-5 py-12"
+              className="flex min-h-full flex-col items-center justify-center px-4 py-8 sm:px-5 sm:py-12"
             >
               {/* Logo mark */}
               <motion.div
@@ -935,7 +956,7 @@ const startVoiceInput = () => {
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.15, duration: 0.35 }}
-                className="text-center text-[28px] font-semibold tracking-tight text-slate-900 dark:text-white sm:text-[36px]"
+                className="text-center text-[22px] font-semibold tracking-tight text-slate-900 dark:text-white sm:text-[36px]"
               >
                 How can I help you?
               </motion.h1>
@@ -956,7 +977,7 @@ const startVoiceInput = () => {
                 variants={{
                   show: { transition: { staggerChildren: 0.07, delayChildren: 0.28 } },
                 }}
-                className="mt-8 grid w-full max-w-xl grid-cols-1 gap-2.5 sm:grid-cols-2"
+                className="mt-6 sm:mt-8 grid w-full max-w-xl grid-cols-1 gap-2 sm:gap-2.5 sm:grid-cols-2"
               >
                 {suggestions.map((item) => (
                   <motion.button
@@ -991,7 +1012,7 @@ const startVoiceInput = () => {
 
           ) : (
             /* ── Message list ────────────────────────────────────────── */
-            <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">
+            <div className="mx-auto w-full max-w-3xl px-3 py-6 sm:px-6 sm:py-8">
               <div className="space-y-6">
                 <AnimatePresence initial={false}>
                   {messages.map((message) => (
@@ -1012,7 +1033,7 @@ const startVoiceInput = () => {
                         </div>
                       )}
 
-                      <div className={`min-w-0 max-w-[82%] ${message.role === "user" ? "flex flex-col items-end" : ""}`}>
+                      <div className={`min-w-0 max-w-[88%] sm:max-w-[82%] ${message.role === "user" ? "flex flex-col items-end" : ""}`}>
                         <p className="mb-1.5 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
                           {message.role === "user" ? "You" : "AI Assistant"}
                           <span className="ml-2 normal-case tracking-normal font-normal opacity-60">
@@ -1092,26 +1113,29 @@ const startVoiceInput = () => {
                               </IconBtn>
                               <button
                                 onClick={() => handleFeedback(message.id, "like")}
-                                className={`rounded-lg px-2 py-1.5 text-sm transition
+                                className={`rounded-lg px-2 py-1.5 transition
                                   ${feedback[message.id] === "like"
-                                    ? "text-emerald-600"
-                                    : "text-slate-400 hover:text-slate-600"
+                                    ? "text-emerald-500 bg-emerald-50 dark:bg-emerald-500/15"
+                                    : "text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-500/10"
                                   }`}
                                 title="Like"
                               >
-
-                                👍
+                                <svg className="h-4 w-4" fill={feedback[message.id] === "like" ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M14 10h4.764a2 2 0 011.789 2.894l-3.5 7A2 2 0 0115.263 21h-4.017c-.163 0-.326-.02-.485-.06L7 20m7-10V5a2 2 0 00-2-2h-.095c-.5 0-.905.405-.905.905 0 .714-.211 1.412-.608 2.006L7 11v9m7-10h-2M7 20H5a2 2 0 01-2-2v-6a2 2 0 012-2h2.5" />
+                                </svg>
                               </button>
                               <button
                                 onClick={() => handleFeedback(message.id, "dislike")}
-                                className={`rounded-lg px-2 py-1.5 text-sm transition
+                                className={`rounded-lg px-2 py-1.5 transition
                                   ${feedback[message.id] === "dislike"
-                                    ? "text-red-500"
-                                    : "text-slate-400 hover:text-slate-600"
+                                    ? "text-red-500 bg-red-50 dark:bg-red-500/15"
+                                    : "text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10"
                                   }`}
                                 title="Dislike"
                               >
-                                👎
+                                <svg className="h-4 w-4" fill={feedback[message.id] === "dislike" ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M10 14H5.236a2 2 0 01-1.789-2.894l3.5-7A2 2 0 018.736 3h4.018a2 2 0 01.485.06L17 4m-7 10v2a2 2 0 002 2h.095c.5 0 .905-.405.905-.904 0-.715.211-1.413.608-2.008L17 13V4m-7 10h2m5-10h2a2 2 0 012 2v6a2 2 0 01-2 2h-2.5" />
+                                </svg>
                               </button>
 
                             </div>
@@ -1168,7 +1192,7 @@ const startVoiceInput = () => {
         </section>
 
         {/* ── Input bar ───────────────────────────────────────────────── */}
-        <div className="shrink-0 border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 py-4 sm:px-5">
+        <div className="shrink-0 border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-3 sm:px-5 sm:py-4">
           <div className="mx-auto max-w-3xl">
             <div className="input-glow overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm transition-colors duration-150">
               <textarea
@@ -1178,13 +1202,13 @@ const startVoiceInput = () => {
                 onKeyDown={handleKeyDown}
                 rows={1}
                 placeholder="Message AI Assistant…"
-                className="block min-h-[52px] w-full resize-none bg-transparent
-                  px-4 pt-[14px] text-[13px] text-slate-800 dark:text-slate-200 outline-none
+                className="block min-h-[48px] w-full resize-none bg-transparent
+                  px-3 pt-3 text-[15px] sm:text-[13px] text-slate-800 dark:text-slate-200 outline-none
                   placeholder:text-slate-400 dark:placeholder:text-slate-500 leading-6"
               />
-              <div className="flex items-center justify-between px-3 pb-3">
+              <div className="flex items-center justify-between px-2.5 pb-2.5 sm:px-3 sm:pb-3">
                 <div className="flex items-center gap-1">
-                  <button className="flex h-7 w-7 items-center justify-center rounded-lg
+                  <button className="flex h-8 w-8 items-center justify-center rounded-lg
                     text-slate-400 dark:text-slate-500 transition hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-600 dark:hover:text-slate-300">
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
@@ -1199,7 +1223,7 @@ const startVoiceInput = () => {
                   onClick={isLoading ? stopGenerating : sendMessage}
                   disabled={!isLoading && !input.trim()}
                   whileTap={{ scale: 0.95 }}
-                  className={`flex h-8 items-center gap-1.5 rounded-xl px-4 text-[11px] font-semibold transition-all duration-150
+                  className={`flex h-9 sm:h-8 items-center gap-1.5 rounded-xl px-4 text-[12px] sm:text-[11px] font-semibold transition-all duration-150
                     ${isLoading
                       ? "bg-red-500 text-white hover:bg-red-600"
                       : input.trim()

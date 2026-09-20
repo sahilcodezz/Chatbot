@@ -83,3 +83,69 @@ body {
 .typing-dot { animation: blink 1.2s ease-in-out infinite; }
 .typing-dot:nth-child(2) { animation-delay: 0.2s; }
 .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* ── Mobile Responsive ─────────────────────────────────────────────────── */
+
+/* Prevent text size auto-increase on iOS */
+html {
+  -webkit-text-size-adjust: 100%;
+  -ms-text-size-adjust: 100%;
+}
+
+/* Safe area for notched devices */
+@supports (padding: env(safe-area-inset-bottom)) {
+  body {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+/* Remove default input styling on mobile */
+input, textarea, select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  border-radius: 0.5rem;
+}
+
+/* Fix iOS zoom on input focus */
+@media screen and (max-width: 768px) {
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  textarea {
+    font-size: 16px !important;
+  }
+
+  /* Better touch targets */
+  button, a, [role="button"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* Sidebar width on small screens */
+@media screen and (max-width: 480px) {
+  .sidebar-panel {
+    width: 85vw !important;
+    max-width: 320px;
+  }
+}
+
+/* Hide scrollbar on mobile for cleaner look */
+@media screen and (max-width: 768px) {
+  ::-webkit-scrollbar { width: 0; height: 0; }
+}
+
+/* Touch-friendly message bubbles */
+@media screen and (max-width: 768px) {
+  .prose-ai p { line-height: 1.65; }
+  .prose-ai table { font-size: 0.75rem; }
+  .prose-ai th, .prose-ai td { padding: 0.35rem 0.5rem; }
+}
+
+/* Dark mode input placeholder fix on mobile */
+@media screen and (prefers-color-scheme: dark) {
+  input::placeholder, textarea::placeholder {
+    opacity: 0.5;
+  }
+}

@@ -1,77 +1,105 @@
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
+const compression = require("compression");
+const rateLimit = require("express-rate-limit");
 const dotenv = require("dotenv");
 const dns = require("dns");
 const { GoogleGenAI } = require("@google/genai");
 const axios = require("axios");
 const mongoose = require("mongoose");
+const { evaluate } = require("mathjs");
 
-// Fix for querySrv ECONNREFUSED on Windows / local ISP DNS
 dns.setServers(["8.8.8.8", "8.8.4.4"]);
-
 dotenv.config();
-console.log("MongoDB URI loaded:", !!process.env.MONGODB_URI);
 
 const app = express();
-
-mongoose
-  .connect(process.env.MONGODB_URI)
-  .then(() => {
-    console.log("MongoDB connected successfully ✅");
-  })
-  .catch((error) => {
-    console.error("MongoDB connection failed ❌", error.message);
-  });
 const PORT = process.env.PORT || 5000;
+
+// ── Security headers ────────────────────────────────────────────────────
+app.use(helmet({ contentSecurityPolicy: false }));
+
+// ── Gzip compression ────────────────────────────────────────────────────
+app.use(compression());
+
+// ── CORS (whitelist origins) ────────────────────────────────────────────
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 app.use(
   cors({
-    origin: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    origin: ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS : true,
+    methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
-app.use(express.json());
+
+// ── Body parser with size limit ─────────────────────────────────────────
+app.use(express.json({ limit: "500kb" }));
+
+// ── Rate limiting ───────────────────────────────────────────────────────
+const chatLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: "Too many requests, please try again later." },
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: "Too many attempts, please try again later." },
+});
+
+const generalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: "Too many requests, please try again later." },
+});
+// ── MongoDB connection ───────────────────────────────────────────────────
+mongoose
+  .connect(process.env.MONGODB_URI)
+  .then(() => {})
+  .catch((error) => {
+    console.error("MongoDB connection failed:", error.message);
+  });
+
+// ── Auth routes with rate limiting ──────────────────────────────────────
 const authRoutes = require("./routes/auth");
 const authMiddleware = require("./middleware/middleware");
+app.use("/api/auth", authLimiter, authRoutes);
 
-app.use("/api/auth", authRoutes);
-
-app.get("/api/protected", authMiddleware, (req, res) => {
-  res.json({
-    success: true,
-    message: "You accessed a protected route 🔐",
-    userId: req.user.userId,
-  });
-});
+// ── File upload ──────────────────────────────────────────────────────────
 const multer = require("multer");
 const pdfParse = require("pdf-parse");
-
 const upload = multer({
-storage: multer.memoryStorage(),
-limits: {
-fileSize: 10 * 1024 * 1024, // 10 MB
-},
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
 });
-
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // Health check
 app.get("/", (req, res) => {
-  res.json({ success: true, message: "Chatbot backend is running 🚀" });
+  res.json({ success: true, message: "Chatbot backend is running" });
 });
+
 const calculateTool = {
   name: "calculate",
-  description:
-    "Perform mathematical calculations when the user asks for arithmetic.",
+  description: "Perform mathematical calculations when the user asks for arithmetic.",
   parameters: {
     type: "object",
     properties: {
       expression: {
         type: "string",
-        description:
-          "A mathematical expression such as 25 * 4 + 10 or (100 / 5) + 7",
+        description: "A mathematical expression such as 25 * 4 + 10 or (100 / 5) + 7",
       },
     },
     required: ["expression"],
@@ -80,8 +108,7 @@ const calculateTool = {
 
 const webSearchTool = {
   name: "web_search",
-  description:
-    "Search the live web when the user asks for current, latest, recent, news, prices, weather, stock information, or other information that may have changed.",
+  description: "Search the live web when the user asks for current, latest, recent, news, prices, weather, stock information, or other information that may have changed.",
   parameters: {
     type: "object",
     properties: {
@@ -96,31 +123,26 @@ const webSearchTool = {
 
 function calculateExpression(expression) {
   try {
-    const { evaluate } = require("mathjs");
-
     const result = evaluate(expression);
-
-    return {
-      success: true,
-      result: String(result),
-    };
-  } catch (error) {
-    return {
-      success: false,
-      result: "Invalid mathematical expression",
-    };
+    return { success: true, result: String(result) };
+  } catch {
+    return { success: false, result: "Invalid mathematical expression" };
   }
 }
 
 // =========================
 // MEMORY API
 // =========================
-app.post("/api/memory", async (req, res) => {
+app.post("/api/memory", generalLimiter, async (req, res) => {
   try {
     const { messages } = req.body;
 
     if (!messages || !messages.trim()) {
       return res.status(400).json({ success: false, error: "Message is required" });
+    }
+
+    if (messages.length > 5000) {
+      return res.status(400).json({ success: false, error: "Message too long (max 5000 characters)" });
     }
 
     const prompt = `You are a memory extraction system.
@@ -141,53 +163,7 @@ User message: "${messages}"`;
     const response = await ai.models.generateContent({
       model: process.env.GEMINI_MODEL || "gemini-3.6-flash",
       contents: [{ role: "user", parts: [{ text: prompt }] }],
-        });
-
-    const functionCall = response.functionCalls?.[0];
-
-if (functionCall) {
-  console.log("🔧 Tool called:", functionCall.name);
-  console.log("📦 Arguments:", functionCall.args);
-
-  let toolResult;
-
-  if (functionCall.name === "calculate") {
-    toolResult = calculateExpression(
-      functionCall.args.expression
-    );
-  }
-
-  contents.push(response.candidates[0].content);
-
-  contents.push({
-    role: "user",
-    parts: [
-      {
-        functionResponse: {
-          name: functionCall.name,
-          response: toolResult,
-        },
-      },
-    ],
-  });
-
-  const finalResponse = await ai.models.generateContent({
-    model: process.env.GEMINI_MODEL || "gemini-3.6-flash",
-    contents,
-    config: {
-      tools: [
-        {
-          functionDeclarations: [calculateTool,webSearchTool],
-        },
-      ],
-    },
-  });
-
-  return res.json({
-    success: true,
-    reply: finalResponse.text,
-  });
-}
+    });
 
     let text = response.text.trim()
       .replace(/^```json\s*/i, "")
@@ -203,27 +179,26 @@ if (functionCall) {
       memory: result.memory || null,
     });
   } catch (error) {
-    console.error("Memory API Error:", error);
     res.status(500).json({ success: false, error: "Failed to extract memory" });
   }
 });
-app.post("/api/memory/consolidate", async (req, res) => {
-try {
-const { memories = [] } = req.body;
+app.post("/api/memory/consolidate", generalLimiter, async (req, res) => {
+  try {
+    const { memories = [] } = req.body;
 
-if (!Array.isArray(memories) || memories.length === 0) {
-  return res.json({
-    success: true,
-    memories: [],
-  });
-}
+    if (!Array.isArray(memories) || memories.length === 0) {
+      return res.json({ success: true, memories: [] });
+    }
 
-const prompt = `You are an AI memory management system.
+    if (memories.length > 100) {
+      return res.status(400).json({ success: false, error: "Too many memories (max 100)" });
+    }
+
+    const prompt = `You are an AI memory management system.
 
 Clean and consolidate the user's long-term memories.
 
 Rules:
-
 Merge duplicate or closely related memories.
 Remove unnecessary repetition.
 Keep useful skills, goals, preferences, projects, and long-term interests.
@@ -243,96 +218,60 @@ Format:
 Existing memories:
 ${memories.map((memory) => `- ${memory}`).join("\n")}`;
 
-const response = await ai.models.generateContent({
-  model: process.env.GEMINI_MODEL || "gemini-3.6-flash",
-  contents: [
-    {
-      role: "user",
-      parts: [{ text: prompt }],
-    },
-  ],
+    const response = await ai.models.generateContent({
+      model: process.env.GEMINI_MODEL || "gemini-3.6-flash",
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    });
+
+    let text = response.text
+      .trim()
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/```$/i, "")
+      .trim();
+
+    const result = JSON.parse(text);
+
+    const cleanedMemories = Array.isArray(result.memories)
+      ? result.memories
+          .filter((memory) => typeof memory === "string" && memory.trim())
+          .map((memory) => memory.trim())
+      : [];
+
+    res.json({ success: true, memories: cleanedMemories });
+  } catch (error) {
+    res.status(500).json({ success: false, error: "Failed to consolidate memories" });
+  }
 });
+app.post("/api/documents/upload", generalLimiter, upload.single("document"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: "PDF document is required" });
+    }
 
-let text = response.text
-  .trim()
-  .replace(/^```json\s*/i, "")
-  .replace(/^```\s*/i, "")
-  .replace(/```$/i, "")
-  .trim();
+    if (req.file.mimetype !== "application/pdf") {
+      return res.status(400).json({ success: false, error: "Only PDF files are supported" });
+    }
 
-const result = JSON.parse(text);
+    const pdfData = await pdfParse(req.file.buffer);
+    const text = pdfData.text.trim();
 
-const cleanedMemories = Array.isArray(result.memories)
-  ? result.memories
-      .filter((memory) => typeof memory === "string" && memory.trim())
-      .map((memory) => memory.trim())
-  : [];
+    if (!text) {
+      return res.status(400).json({ success: false, error: "Could not extract text from this PDF" });
+    }
 
-res.json({
-  success: true,
-  memories: cleanedMemories,
-});
-
-} catch (error) {
-console.error("Memory consolidation error:", error);
-
-res.status(500).json({
-  success: false,
-  error: "Failed to consolidate memories",
-});
-
-}
-});
-app.post("/api/documents/upload", upload.single("document"), async (req, res) => {
-try {
-if (!req.file) {
-return res.status(400).json({
-success: false,
-error: "PDF document is required",
-});
-}
-
-
-if (req.file.mimetype !== "application/pdf") {
-  return res.status(400).json({
-    success: false,
-    error: "Only PDF files are supported",
-  });
-}
-
-const pdfData = await pdfParse(req.file.buffer);
-
-const text = pdfData.text.trim();
-
-if (!text) {
-  return res.status(400).json({
-    success: false,
-    error: "Could not extract text from this PDF",
-  });
-}
-
-res.json({
-  success: true,
-  document: {
-    name: req.file.originalname,
-    size: req.file.size,
-    pages: pdfData.numpages,
-    text,
-  },
-});
-
-
-} catch (error) {
-console.error("PDF upload error:", error);
-
-
-res.status(500).json({
-  success: false,
-  error: "Failed to process PDF",
-});
-
-
-}
+    res.json({
+      success: true,
+      document: {
+        name: req.file.originalname,
+        size: req.file.size,
+        pages: pdfData.numpages,
+        text: text.substring(0, 50000),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: "Failed to process PDF" });
+  }
 });
 
 
@@ -340,7 +279,7 @@ res.status(500).json({
 // CHAT API
 // =========================
 
-app.post("/api/chat", async (req, res) => {
+app.post("/api/chat", chatLimiter, async (req, res) => {
   try {
     const {
       message,
@@ -349,10 +288,19 @@ app.post("/api/chat", async (req, res) => {
     } = req.body;
 
     if (!message || !message.trim()) {
-      return res.status(400).json({
-        success: false,
-        error: "Message is required",
-      });
+      return res.status(400).json({ success: false, error: "Message is required" });
+    }
+
+    if (message.length > 10000) {
+      return res.status(400).json({ success: false, error: "Message too long (max 10000 characters)" });
+    }
+
+    if (!Array.isArray(history) || history.length > 50) {
+      return res.status(400).json({ success: false, error: "History too large (max 50 messages)" });
+    }
+
+    if (!Array.isArray(memories) || memories.length > 100) {
+      return res.status(400).json({ success: false, error: "Too many memories (max 100)" });
     }
 
     // =========================
@@ -449,20 +397,12 @@ ${memories.map((m) => `- ${m}`).join("\n")}
       lowerMessage.includes(keyword)
     );
 
-    console.log(
-      `Web search: ${
-        shouldSearchWeb ? "YES 🌐" : "NO 🧠"
-      } → ${message}`
-    );
-
     // =========================
     // TAVILY WEB SEARCH
     // =========================
 
     if (shouldSearchWeb) {
       try {
-        console.log("🔎 Searching Tavily...");
-
         const searchResponse = await axios.post(
           "https://api.tavily.com/search",
           {
@@ -480,35 +420,6 @@ ${memories.map((m) => `- ${m}`).join("\n")}
         );
 
         const searchData = searchResponse.data;
-
-        // =========================
-        // DEBUG SEARCH RESULTS
-        // =========================
-
-        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        console.log("🌐 TAVILY SEARCH COMPLETED");
-        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-        console.log(
-          "📝 Tavily Answer:",
-          searchData.answer || "No direct answer found."
-        );
-
-        console.log("📚 Tavily Results:");
-
-        (searchData.results || []).forEach((result, index) => {
-          console.log(`\n${index + 1}. ${result.title}`);
-          console.log(`🔗 ${result.url}`);
-          console.log(
-            `📄 ${result.content?.substring(0, 500) || "No content"}`
-          );
-        });
-
-        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-        // =========================
-        // BUILD WEB CONTEXT
-        // =========================
 
         const webContext = `
 IMPORTANT: The user asked a question that may require current information.
@@ -564,13 +475,8 @@ Instructions:
             },
           ],
         });
-
-        console.log("✅ Web context added to Gemini");
       } catch (searchError) {
-        console.error(
-          "❌ Web search inside chat failed:",
-          searchError.response?.data || searchError.message
-        );
+        // Web search failed, continue without it
       }
     }
 
@@ -602,9 +508,6 @@ Instructions:
     const functionCall = response.functionCalls?.[0];
 
     if (functionCall) {
-      console.log("🔧 Tool called:", functionCall.name);
-      console.log("📦 Arguments:", functionCall.args);
-
       let toolResult;
 
       // =========================
@@ -623,11 +526,6 @@ Instructions:
 
       else if (functionCall.name === "web_search") {
         try {
-          console.log(
-            "🌐 Gemini requested web search:",
-            functionCall.args.query
-          );
-
           const searchResponse = await axios.post(
             "https://api.tavily.com/search",
             {
@@ -661,15 +559,7 @@ Instructions:
               })
             ),
           };
-
-          console.log("✅ Gemini web search completed");
         } catch (searchError) {
-          console.error(
-            "❌ Web search tool failed:",
-            searchError.response?.data ||
-              searchError.message
-          );
-
           toolResult = {
             success: false,
             error: "Web search failed",
@@ -735,8 +625,6 @@ Instructions:
       reply: response.text,
     });
   } catch (error) {
-    console.error("Gemini API Error:", error);
-
     res.status(500).json({
       success: false,
       error: "Failed to generate AI response",
@@ -744,6 +632,21 @@ Instructions:
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT} 🚀`);
+// ── Global error handler ────────────────────────────────────────────────
+app.use((err, req, res, _next) => {
+  res.status(500).json({ success: false, error: "Internal server error" });
 });
+
+// ── Start server ────────────────────────────────────────────────────────
+const server = app.listen(PORT);
+
+// ── Graceful shutdown ───────────────────────────────────────────────────
+const shutdown = () => {
+  server.close(() => {
+    mongoose.connection.close(false).then(() => process.exit(0));
+  });
+  setTimeout(() => process.exit(1), 10000);
+};
+
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
